@@ -2,15 +2,12 @@
     tempSensor
     main.cpp
 
-    Purpose: simple firmware for esp8266 with MQTT for controling a relay and
+    Purpose: simple firmware for esp8266 with REST API for controling a relay and
     monitoring temperature
 
     @author Mathieu Tauban
     @version 0.0.1 1/09/2017
 */
-
-
-
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
 #include <ArduinoOTA.h>
