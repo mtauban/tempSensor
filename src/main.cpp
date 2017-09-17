@@ -1,8 +1,20 @@
+/**
+    tempSensor
+    main.cpp
+
+    Purpose: simple firmware for esp8266 with MQTT for controling a relay and
+    monitoring temperature
+
+    @author Mathieu Tauban
+    @version 0.0.1 1/09/2017
+*/
+
+
+
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
 #include <ArduinoOTA.h>
-#include <FS.h>
-#include <Hash.h>
+
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 
@@ -14,18 +26,22 @@
 
 #define ONE_WIRE_BUS D1
 #define CLIENT_DATA_JSON_SIZE 500
-
 #define UD_RELAY_PIN 16
 #define UD_LED_PIN LED_BUILTIN
 #define UD_SECURITY_MS 300000
-
 #define UD_RELAY_OFF HIGH
 #define UD_RELAY_ON  LOW
-
 #define UD_STATE_OFF 0
 #define UD_STATE_ON 1
 
 
+// following line to allow frontend debugging with permissive CORS
+// more data on CORS : https://www.w3.org/TR/cors/
+// Philosophy : Any specific headers or HTTP verbs requested by client calls via
+// Access-Control-Request-Method or Access-Control-Request-Headers will be
+// automatically added to the corresponding response headers.
+// In other words, this middleware ALLOWS ALL THE THINGS.
+// --> description from https://github.com/caike/permissive-cors
 // #define DEBUG_CORS (1)
 
 unsigned int relaystate = 0;
@@ -36,13 +52,15 @@ char temperatureString[6];
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
 
-// SKETCH BEGIN
+
 AsyncWebServer server(80);
 
 AsyncEventSource events("/events");
 
 
-
+/**
+    Returns the temperature as measured by the DS18B20 temperature sensor
+*/
 float getTemperature() {
     float temp;
     do {
@@ -54,22 +72,36 @@ float getTemperature() {
 }
 
 
-
+/**
+    Turns the relay ON
+    Returns the state of the relay
+*/
 int turnRelayOn() {
     digitalWrite(UD_RELAY_PIN, UD_RELAY_ON);
     relaystate = UD_STATE_ON;
     return relaystate;
 }
+/**
+    Turns the relay OFF
+    Returns the state of the relay
+*/
 int turnRelayOff() {
     digitalWrite(UD_RELAY_PIN, UD_RELAY_OFF);
     relaystate = UD_STATE_OFF;
     return relaystate;
 }
 
+/**
+    Returns the state of the relay
+*/
 int getRelayState() {
     return relaystate;
 }
 
+
+/**
+    Returns a formated json string with temp, dlm and status
+*/
 String formatedJSONResponse() {
     StaticJsonBuffer<CLIENT_DATA_JSON_SIZE> jsonBuffer;
     JsonObject& root = jsonBuffer.createObject();
@@ -86,22 +118,17 @@ String formatedJSONResponse() {
 }
 
 
-// Intended for debugging of frontend only
+// WARNING : Intended for debugging of frontend only
 // returns a very permissive CORS response to AJAX request
 #ifdef DEBUG_CORS
 void handleCORS(AsyncWebServerRequest * request,  AsyncWebServerResponse * response) {
-    int headers = request->headers();
-    int i;
-    for (i = 0; i < headers; i++) {
+    // ALLOW ALL THE HEADERS !!!!!!
+    for (int i = 0; i <  request->headers(); i++) {
         AsyncWebHeader * h = request->getHeader(i);
-        Serial.printf("HEADER[%s]: %s\n", h->name().c_str(),
-        h->value().c_str());
         if (h->name() == "Access-Control-Request-Method") {
-            Serial.printf("Allowing method [%s]", h->value().c_str());
             response->addHeader("Access-Control-Allow-Method", h->value());
         }
         if (h->name() == "Access-Control-Request-Headers") {
-            Serial.printf("Allowing header [%s]", h->value().c_str());
             response->addHeader("Access-Control-Allow-Headers", h->value());
         }
     }
@@ -110,23 +137,25 @@ void handleCORS(AsyncWebServerRequest * request,  AsyncWebServerResponse * respo
 #endif
 
 
+
+
+
 void setup() {
+
     pinMode(UD_RELAY_PIN, OUTPUT);
     digitalWrite(UD_RELAY_PIN, UD_RELAY_OFF);
 
-
     DS18B20.begin();
+
 
     lasttime = millis();
 
-    Serial.begin(115200);
-    Serial.setDebugOutput(true);
     WiFi.hostname(UD_HOSTNAME);
     WiFi.mode(WIFI_STA);
-    // WiFi.softAP(hostName);
+
     WiFi.begin(UD_WIFI_SSID, UD_WIFI_PASS);
     if (WiFi.waitForConnectResult() != WL_CONNECTED) {
-        Serial.printf("STA: Failed!\n");
+        // STA Failed
         WiFi.disconnect(false);
         delay(1000);
         WiFi.begin(UD_WIFI_SSID, UD_WIFI_PASS);
@@ -163,81 +192,63 @@ void setup() {
             client->send("hello!",NULL,millis(),1000);
         }
     );
+
+
     server.addHandler(&events);
 
 
+    // get request
+    // returns free heap
+    // never been used
     server.on("/heap", HTTP_GET,[](AsyncWebServerRequest *request) {
         request->send(200, "text/plain", String(ESP.getFreeHeap()));
     });
 
+
+    // get request
+    // sets relay on
+    // returns the json status
     server.on("/state/on", HTTP_GET, [](AsyncWebServerRequest * request) {
         lasttime = millis();
         turnRelayOn();
         request->send(200, "application/json", formatedJSONResponse());
     });
+
+    // get request
+    // sets relay off
+    // returns the json status
     server.on("/state/off", HTTP_GET, [](AsyncWebServerRequest *request) {
         lasttime = millis();
         turnRelayOff();
         request->send(200, "application/json", formatedJSONResponse());
     });
 
+    // returns the json status
     server.on("/state", HTTP_GET, [](AsyncWebServerRequest *request) {
         request->send(200, "application/json", formatedJSONResponse());
     });
 
+    // post request
+    // used for setting status theoretically
+    // returns the json status
     server.on("/state", HTTP_POST,
         [](AsyncWebServerRequest * request) {
-            int params = request->params();
-            for (int i = 0; i < params; i++) {
-                AsyncWebParameter * p = request->getParam(i);
-                if (p->isFile()) {       // p->isPost() is also true
-                    Serial.printf("FILE[%s]: %s, size: %u\n", p->name().c_str(),
-                    p->value().c_str(), p->size());
-                } else if (p->isPost()) {
-                    Serial.printf("POST[%s]: %s\n", p->name().c_str(),
-                    p->value().c_str());
-                } else {
-                    Serial.printf("GET[%s]: %s\n", p->name().c_str(),
-                    p->value().c_str());
-                }
-            }
-            int headers = request->headers();
-            int i;
-            for (i = 0; i < headers; i++) {
-                AsyncWebHeader * h = request->getHeader(i);
-                Serial.printf("HEADER[%s]: %s\n", h->name().c_str(), h->value().c_str());
-            }
-
-            Serial.printf("Starting Response\n");
-
-            AsyncWebServerResponse * response =
-            request->beginResponse(200, "application/json", formatedJSONResponse());
+            AsyncWebServerResponse * response =  request->beginResponse(200, "application/json", formatedJSONResponse());
             #ifdef DEBUG_CORS
             handleCORS(request, response);
             #endif
             request->send(response);
-
-            Serial.printf("Sent Response\n");
         },
         [](AsyncWebServerRequest * request, String filename, size_t index, uint8_t * data, size_t len, bool final) {
         },
         [](AsyncWebServerRequest * request, uint8_t * data, size_t len, size_t index, size_t total) {
-        Serial.printf("Processing Body\n");
-        if (!index) {
-            Serial.printf("BodyStart: %u B\n", total);
-        }
-        for (size_t i = 0; i < len; i++) {
-            Serial.write(data[i]);
-        }
-        if (index + len == total) {
-            Serial.printf("BodyEnd: %u B\n", total);
-        }
+
         DynamicJsonBuffer jsonBuffer;
         JsonObject & root = jsonBuffer.parseObject(data);
 
         // Test if parsing succeeds.
         if (!root.success()) {
-            Serial.println("parseObject() failed");
+            // Parsing failed, aborting
             return;
         }
         if (root.containsKey("status")) {
